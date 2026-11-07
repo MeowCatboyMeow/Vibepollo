@@ -86,9 +86,20 @@ namespace platf::dualsense_usbip_gamepad {
       const bool rumble_valid =
         (report.valid_flag0 & lvg::driver::k_ds5_flag0_compatible_vibration) ||
         (report.valid_flag2 & lvg::driver::k_ds5_flag2_compatible_vibration);
-      result.rumble = rumble_valid &&
-                      (!have_rumble_ || previous.low_frequency != state_.low_frequency ||
-                       previous.high_frequency != state_.high_frequency);
+      // A DualSense only emulates rumble while the reports ask for it. SDL and Steam end rumble
+      // with a report that sets neither vibration bit nor haptics select ("leaving emulated
+      // rumble bits off will restore audio haptics", SDL_hidapi_ps5.c), and the controller
+      // returns to audio haptics. Keeping the last motor values instead left the client
+      // rumbling until its own timeout.
+      const bool rumble_released =
+        !rumble_valid && !(report.valid_flag0 & lvg::driver::k_ds5_flag0_haptics_select);
+      if (rumble_released) {
+        state_.low_frequency = 0;
+        state_.high_frequency = 0;
+      }
+      const bool rumble_changed = previous.low_frequency != state_.low_frequency ||
+                                  previous.high_frequency != state_.high_frequency;
+      result.rumble = (rumble_valid && (!have_rumble_ || rumble_changed)) || (rumble_released && rumble_changed);
       have_rumble_ = have_rumble_ || rumble_valid;
       result.rgb = (report.valid_flag1 & lvg::driver::k_ds5_flag1_lightbar) &&
                    (!(previous.valid & lvg::ps_output_lightbar_valid) ||

@@ -59,15 +59,68 @@ TEST(DualSenseUsbipGamepadPolicyTests, FeedbackHonorsValidityAndRetainsOmittedTr
   EXPECT_FALSE(state.apply(bytes(report)).rumble);
   EXPECT_FALSE(state.apply(bytes(report)).rgb);
 
+  // No vibration bit and no haptics select: the controller leaves rumble emulation.
   report.valid_flag2 = 0;
   report.valid_flag1 = 0;
   report.motor_left = 0;
   report.lightbar_red = 0;
   update = state.apply(bytes(report));
-  EXPECT_FALSE(update.rumble);
+  EXPECT_TRUE(update.rumble);
   EXPECT_FALSE(update.rgb);
-  EXPECT_EQ(update.state.low_frequency, 100 << 8);
+  EXPECT_EQ(update.state.low_frequency, 0);
   EXPECT_EQ(update.state.red, 50);
+  EXPECT_FALSE(state.apply(bytes(report)).rumble);
+}
+
+TEST(DualSenseUsbipGamepadPolicyTests, SdlStyleRumbleOffReportStopsTheMotors) {
+  output_state state;
+  lvg::driver::ds5_output_report report {};
+  report.report_id = 2;
+
+  // SDL_hidapi_ps5.c, rumble start: haptics select alone, motors not yet valid.
+  report.valid_flag0 = lvg::driver::k_ds5_flag0_haptics_select;
+  auto update = state.apply(bytes(report));
+  EXPECT_FALSE(update.rumble);
+  EXPECT_EQ(update.state.low_frequency, 0);
+
+  // Legacy rumble emulation (firmware before 2.24).
+  report.valid_flag0 = lvg::driver::k_ds5_flag0_compatible_vibration | lvg::driver::k_ds5_flag0_haptics_select;
+  report.motor_left = 0x5C;
+  update = state.apply(bytes(report));
+  EXPECT_TRUE(update.rumble);
+  EXPECT_EQ(update.state.low_frequency, 0x5C << 8);
+
+  // A haptics-select-only report keeps rumbling at the last strength.
+  report.valid_flag0 = lvg::driver::k_ds5_flag0_haptics_select;
+  report.motor_left = 0;
+  update = state.apply(bytes(report));
+  EXPECT_FALSE(update.rumble);
+  EXPECT_EQ(update.state.low_frequency, 0x5C << 8);
+
+  // Improved rumble emulation (firmware 2.24 and newer) carries the motors in flag2.
+  report.valid_flag0 = lvg::driver::k_ds5_flag0_haptics_select;
+  report.valid_flag2 = lvg::driver::k_ds5_flag2_compatible_vibration;
+  report.motor_left = 0x65;
+  report.motor_right = 0x10;
+  update = state.apply(bytes(report));
+  EXPECT_TRUE(update.rumble);
+  EXPECT_EQ(update.state.low_frequency, 0x65 << 8);
+  EXPECT_EQ(update.state.high_frequency, 0x10 << 8);
+
+  // Rumble off: SDL leaves every rumble bit clear, so the motors stop.
+  report = {};
+  report.report_id = 2;
+  update = state.apply(bytes(report));
+  EXPECT_TRUE(update.rumble);
+  EXPECT_EQ(update.state.low_frequency, 0);
+  EXPECT_EQ(update.state.high_frequency, 0);
+
+  // Further reports without rumble bits (lights, triggers) change nothing more.
+  report.valid_flag1 = lvg::driver::k_ds5_flag1_lightbar;
+  report.lightbar_blue = 200;
+  update = state.apply(bytes(report));
+  EXPECT_FALSE(update.rumble);
+  EXPECT_TRUE(update.rgb);
 }
 
 TEST(DualSenseUsbipGamepadPolicyTests, RejectsWrongReportAndTruncatedRgbPayload) {
